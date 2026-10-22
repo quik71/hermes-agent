@@ -3,14 +3,18 @@
 When the Webapp's listener cannot start, even after its dashboard mount is up (another process won the
 race to listen on the port), the gateway comes up on main's private loopback listener instead: native
 Desktop, CLI and TUI clients still connect, the mount carries none of the Webapp's state, and
-``hermes webapp --status`` says why the Webapp is not served. Each case runs a real gateway listener
-in a child process (``fixtures/webapp_fallback_peer.py``) with its own ``HERMES_HOME``.
+``hermes webapp --status`` says why the Webapp is not served. That private listener never asks for
+sign-in, whatever the config says: ``dashboard.public_url`` describes ``hermes dashboard``, and a
+sign-in gate with no provider would otherwise stop the whole gateway. Each case runs a real gateway
+listener in a child process (``fixtures/webapp_fallback_peer.py``) with its own ``HERMES_HOME``.
 """
 import sys
 
 import pytest
 
 from tests.gateway.fixtures.webapp_fallback_peer import free_port as _free_port, run as _run
+
+DASHBOARD_URL = "https://dash.example.net"
 
 
 @pytest.fixture(scope="module")
@@ -59,3 +63,27 @@ def test_the_webapp_port_accepts_connections_before_the_dashboard_mounts(tmp_pat
     assert report["start_error"] is None, report.get("start_traceback")
     assert report["connect_during_mount"] == "connected"
     assert report["status"]["state"] == "serving"
+
+
+@pytest.mark.parametrize("provider", [False, True], ids=["no-sign-in-provider", "password-sign-in"])
+def test_the_dashboards_public_url_never_gates_the_private_listener(tmp_path, provider):
+    spec = {"webapp": None, "dashboard_public_url": DASHBOARD_URL, "basic_auth": provider,
+            "probe_host": "dash.example.net"}
+    report = _run(tmp_path, spec)
+    assert report["start_error"] is None, report.get("start_traceback")
+    assert report["native_session_list"] is True
+    assert report["state"]["auth_required"] is False
+    # Not gated, so it accepts no outside hostname either.
+    assert report["state"]["trusted_public_hosts"] == []
+    assert report["probe_host_status_code"] == 400
+
+
+def test_a_webapp_that_needs_sign_in_falls_back_to_an_ungated_private_listener(tmp_path):
+    # The Webapp's own URL needs sign-in it cannot have; the dashboard's URL must not stop the fallback.
+    spec = {"webapp": {"enabled": True, "port": _free_port(), "public_url": "https://webapp.example.net"},
+            "dashboard_public_url": DASHBOARD_URL}
+    report = _run(tmp_path, spec)
+    assert report["start_error"] is None, report.get("start_traceback")
+    assert report["native_session_list"] is True
+    assert report["status"]["state"] == "unavailable"
+    assert report["state"]["auth_required"] is False

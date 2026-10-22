@@ -147,7 +147,7 @@ def _desktop_loopback_auth_exempt(
 
 def listener_auth_required(host: str, trusted_public_hosts: frozenset[str]) -> bool:
     """The ``app.state.auth_required`` value ``web_server._configure_auth_gate(host, False, None,
-    None)`` resolves for a listener with no SSH credentials (the gateway's session listener)."""
+    None)`` resolves for a listener with no SSH credentials that reads ``dashboard.public_url``."""
     if _desktop_loopback_auth_exempt(host):
         return should_require_auth(host)
     return should_require_auth(host) or public_hosts_engage_gate(trusted_public_hosts)

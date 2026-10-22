@@ -8,8 +8,8 @@ The native session WebSocket (ticketed ``/api/ws`` — every local CLI/TUI/Deskt
 without the dashboard app: importing ``hermes_cli.web_server`` (about 690 routes, ~0.6 s) before the
 listener bound stalled every cold start and the control socket's identify. The dashboard is mounted
 on its first request (imported off the event loop) or warmed after READY for a supervised gateway
-(``warm_gateway_dashboard``); a gated listener (non-loopback bind, ``webapp.public_url`` on the Webapp's,
-``dashboard.public_url`` on the private one) and a
+(``warm_gateway_dashboard``); a gated listener (non-loopback bind, or ``webapp.public_url`` on the
+Webapp's; the private listener never asks for sign-in) and a
 process that already imported it mount it before the listener starts, exactly as before.
 """
 
@@ -74,11 +74,7 @@ class GatewayDashboardMount:
         # GET /, so the gateway-hosted listener never publishes it.
         web.app.state.withhold_session_token = True
         webapp = getattr(self._state, "webapp", None)
-        own_url = _listener_public_url(webapp)
-        if own_url is not None:
-            web.app.state.listener_public_url = own_url
-        elif hasattr(web.app.state, "listener_public_url"):
-            delattr(web.app.state, "listener_public_url")
+        web.app.state.listener_public_url = _listener_public_url(webapp)
         web._configure_auth_gate(self._state.bound_host, False, None, None)
         web.app.state.gateway_runner = self.runner
         web.app.state.session_authority = getattr(self.runner, "session_authority", None)
@@ -175,20 +171,17 @@ def _listener_socket(family, kind, proto, port: int) -> socket.socket:
     return listener
 
 
-def _listener_public_url(webapp) -> str | None:
-    """The public URL the listener answers to: the Webapp's own ``webapp.public_url`` ("" for none),
-    never ``dashboard.public_url``, which describes ``hermes dashboard``. None leaves main's listener
-    reading ``dashboard.public_url``."""
-    return None if webapp is None else webapp.public_url
+def _listener_public_url(webapp) -> str:
+    """The public URL the listener answers to: the Webapp's own ``webapp.public_url`` ("" for none).
+    The private listener for native clients has none, whatever the config says, so it never asks for
+    sign-in; ``dashboard.public_url`` describes ``hermes dashboard`` and applies to neither."""
+    return "" if webapp is None else webapp.public_url
 
 
 async def start_gateway_api(runner, *, host: str = "127.0.0.1", port: int = 0, webapp=None) -> GatewayAPIHandle:
     global _ACTIVE_RUNNER
     from gateway.webapp_listener import dial_origin
-    from hermes_cli.web_server_boundary import (
-        _dashboard_public_hosts, listener_auth_required, public_hosts_engage_gate, public_url_hosts,
-        should_require_auth,
-    )
+    from hermes_cli.web_server_boundary import public_hosts_engage_gate, public_url_hosts, should_require_auth
     from hermes_cli.web_server_lifecycle import build_listener_server
 
     # Existing routers/auth helpers share one process-local app. Never rebind it
@@ -197,14 +190,9 @@ async def start_gateway_api(runner, *, host: str = "127.0.0.1", port: int = 0, w
     if _ACTIVE_RUNNER is not None or (
             loaded_web is not None and getattr(loaded_web.app.state, "gateway_runner", None) is not None):
         raise RuntimeError("gateway API already started")
-    public_url = _listener_public_url(webapp)
-    if public_url is None:
-        trusted = _dashboard_public_hosts()
-        auth_required = listener_auth_required(host, trusted)
-    else:
-        # What web_server._configure_auth_gate decides for a listener that declares its public URL.
-        trusted = public_url_hosts(public_url)
-        auth_required = should_require_auth(host) or public_hosts_engage_gate(trusted)
+    # What web_server._configure_auth_gate decides for a listener that declares its public URL.
+    trusted = public_url_hosts(_listener_public_url(webapp))
+    auth_required = should_require_auth(host) or public_hosts_engage_gate(trusted)
     state = types.SimpleNamespace(
         bound_host=host, bound_port=None, auth_required=auth_required,
         trusted_public_hosts=trusted, gateway_runner=runner,

@@ -8,6 +8,10 @@ from websockets.asyncio.client import connect
 
 @pytest.mark.asyncio
 async def test_runtime_preserves_browser_ticket_gate(tmp_path):
+    # A gated gateway listener (the Webapp's behind its own public URL) still admits a browser ticket
+    # minted by the dashboard sign-in on its session socket.
+    import socket
+
     from gateway.config import GatewayConfig
     from gateway.run import GatewayRunner
     from gateway.run_runtime import (initialize_gateway_runtime, start_gateway_runtime_api,
@@ -19,7 +23,11 @@ async def test_runtime_preserves_browser_ticket_gate(tmp_path):
     from tests.hermes_cli.conftest_dashboard_auth import StubAuthProvider
 
     home = get_hermes_home()
-    (home / 'config.yaml').write_text('dashboard:\n  public_url: https://gateway.example.test\n')
+    with socket.socket() as probe:
+        probe.bind(('127.0.0.1', 0))
+        port = probe.getsockname()[1]
+    (home / 'config.yaml').write_text(
+        f'webapp:\n  enabled: true\n  port: {port}\n  public_url: https://gateway.example.test\n')
     register_provider(StubAuthProvider())
     process_ownership.reserve([home])
     runner = GatewayRunner(GatewayConfig())
