@@ -84,6 +84,25 @@ def test_the_webapp_port_accepts_connections_before_the_dashboard_mounts(tmp_pat
     assert report["status"]["state"] == "serving"
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="SO_EXCLUSIVEADDRUSE is a Windows socket option")
+def test_on_windows_the_webapps_fixed_port_is_held_exclusively():
+    # Without exclusive use another process may bind the Webapp's port with SO_REUSEADDR (a more
+    # specific address then takes those connections). Main's private ephemeral listener is unchanged.
+    import socket
+
+    from gateway import run_api
+    with run_api._listener_socket(socket.AF_INET, socket.SOCK_STREAM, 0, _free_port()) as fixed, \
+            run_api._listener_socket(socket.AF_INET, socket.SOCK_STREAM, 0, 0) as ephemeral:
+        assert fixed.getsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE) == 1
+        assert ephemeral.getsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE) == 0
+        fixed.bind(("127.0.0.1", 0))
+        fixed.listen()
+        with socket.socket() as rival:
+            rival.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            with pytest.raises(OSError):
+                rival.bind(fixed.getsockname())
+
+
 @pytest.mark.parametrize("provider", [False, True], ids=["no-sign-in-provider", "password-sign-in"])
 def test_the_dashboards_public_url_never_gates_the_private_listener(tmp_path, provider):
     spec = {"webapp": None, "dashboard_public_url": DASHBOARD_URL, "basic_auth": provider,
